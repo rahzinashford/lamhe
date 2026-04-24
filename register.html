@@ -5,7 +5,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Register — Lamhe Farewell Party</title>
-  <link rel="icon" type="image/png" href="images/favicon.png" />
+  <link rel="icon" type="image/png" href="static/images/favicon.png" />
+  <script src="config.js"></script>
   <style>
     *,
     *::before,
@@ -888,7 +889,7 @@
         <button class="toggle-btn active" id="btn-seniors" role="tab" aria-selected="true"
           onclick="switchTab('seniors')">Seniors</button>
         <button class="toggle-btn" id="btn-juniors" role="tab" aria-selected="false"
-          onclick="switchTab('juniors')">2nd & 1st Years</button>
+          onclick="switchTab('juniors')">Juniors</button>
       </div>
 
       <div class="forms-container" id="forms-container">
@@ -994,7 +995,10 @@
               </div>
               <div class="field">
                 <label for="j-whatsapp">WhatsApp Number</label>
-                <input type="tel" id="j-whatsapp" inputmode="numeric" placeholder="10-digit number" required />
+                <div class="wa-wrap" style="display:flex;align-items:stretch;gap:0;border:1px solid var(--input-border);border-radius:10px;background:var(--input-bg);overflow:hidden">
+                  <span class="wa-cc" style="display:flex;align-items:center;padding:0 12px;background:rgba(255,255,255,.04);color:var(--text-dim);font-size:.95rem;border-right:1px solid var(--input-border);user-select:none">+91</span>
+                  <input type="tel" id="j-whatsapp" inputmode="numeric" maxlength="10" pattern="[0-9]{10}" placeholder="10-digit number" required style="flex:1;border:none;background:transparent" />
+                </div>
               </div>
             </div>
 
@@ -1002,7 +1006,7 @@
             <div class="wizard-step" data-step="2">
               <div class="payment-block">
                 <div class="qr-wrap" id="j-qr-wrap" title="Click to enlarge">
-                  <img id="j-qr-img" src="images/qr.png" alt="UPI QR"
+                  <img id="j-qr-img" src="static/images/qr.png" alt="UPI QR"
                     onerror="this.style.display='none'; this.nextElementSibling.style.display='block'; this.parentElement.style.cursor='default';" />
                   <div class="qr-placeholder" style="display:none;"></div>
                 </div>
@@ -1234,7 +1238,7 @@
           let bad = !v;
           if (!bad && el.id === 'j-whatsapp') {
             const digits = v.replace(/\D/g, '');
-            bad = digits.length < 10 || digits.length > 15;
+            bad = digits.length !== 10;
           }
           jMarkInvalid(el, bad);
           if (bad) ok = false;
@@ -1250,7 +1254,7 @@
             if (!v) return true;
             if (el.id === 'j-whatsapp') {
               const d = v.replace(/\D/g, '');
-              return d.length < 10 || d.length > 15;
+              return d.length !== 10;
             }
             return false;
           });
@@ -1270,7 +1274,20 @@
       return true;
     }
 
-    const SHEETS_ENDPOINT = 'https://script.google.com/macros/s/AKfycbz8x7fnLySphCVZL-261JHgQ8IIC2dtcrOONRIt1J1z_6O9kzA8-CCt4ACoE6lIn1yipw/exec';
+    const SHEETS_ENDPOINT = (window.LAMHE_CONFIG && window.LAMHE_CONFIG.SHEETS_ENDPOINT) || 'https://script.google.com/macros/s/AKfycbz8x7fnLySphCVZL-261JHgQ8IIC2dtcrOONRIt1J1z_6O9kzA8-CCt4ACoE6lIn1yipw/exec';
+    const BACKEND_BASE = (window.LAMHE_CONFIG && window.LAMHE_CONFIG.BACKEND_BASE_URL) || '';
+    const BACKEND_ENDPOINT = BACKEND_BASE.replace(/\/$/, '') + '/api/register';
+
+    // Live-strip non-digits and cap to 10 on the WhatsApp field
+    (function () {
+      const w = document.getElementById('j-whatsapp');
+      if (w) {
+        w.addEventListener('input', () => {
+          const d = w.value.replace(/\D/g, '').slice(0, 10);
+          if (w.value !== d) w.value = d;
+        });
+      }
+    })();
 
     async function jSubmit() {
       const btn = document.getElementById('j-next-btn');
@@ -1280,21 +1297,36 @@
       const originalText = btn.textContent;
       btn.disabled = true; back.disabled = true;
       btn.textContent = 'Submitting…';
+
+      const payload = {
+        name: jState.name,
+        lh: jState.lh,
+        regNo: jState.regNo,
+        whatsapp: jState.whatsapp,
+        transactionId: jState.transactionId
+      };
+
+      // Backend (source of truth) — must succeed.
+      const backendPromise = fetch(BACKEND_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      }).then(async (res) => {
+        const j = await res.json().catch(() => ({ ok: false }));
+        if (!res.ok || !j.ok) throw new Error(j.error || 'Submission failed');
+        return j;
+      });
+
+      // Google Sheet (backup log) — fire-and-forget; do NOT block on failure.
+      fetch(SHEETS_ENDPOINT, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(payload)
+      }).catch(() => { /* sheet outage shouldn't block registration */ });
+
       try {
-        const res = await fetch(SHEETS_ENDPOINT, {
-          method: 'POST',
-          mode: 'cors',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            name: jState.name,
-            lh: jState.lh,
-            regNo: jState.regNo,
-            whatsapp: jState.whatsapp,
-            transactionId: jState.transactionId
-          })
-        });
-        const json = await res.json().catch(() => ({ ok: false }));
-        if (!res.ok || !json.ok) throw new Error(json.error || 'Submission failed');
+        await backendPromise;
         document.getElementById('main-content').style.display = 'none';
         document.getElementById('back-link').style.display = 'none';
         document.getElementById('success').classList.add('show');
